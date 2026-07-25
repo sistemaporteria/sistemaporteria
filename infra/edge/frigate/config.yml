@@ -1,0 +1,113 @@
+# Frigate — portería vehicular UNAL Manizales
+# Docs: https://docs.frigate.video/configuration/
+#
+# Demo setup: two "cameras" are looping video files served over RTSP by the rtsp-sim
+# service. Replace the RTSP paths with the real camera URLs when hardware is installed;
+# nothing else in this file needs to change.
+
+mqtt:
+  enabled: true
+  host: mosquitto
+  port: 1883
+  topic_prefix: frigate
+  client_id: frigate-porteria
+
+detectors:
+  # CPU detector: slow but dependency-free, correct for a demo laptop.
+  # Production on an Intel mini PC: switch to type: openvino, device: GPU.
+  cpu:
+    type: cpu
+    num_threads: 4
+
+# Only vehicles matter here. Narrowing the object list cuts false positives and CPU.
+objects:
+  track:
+    - car
+    - motorcycle
+    - bus
+    - truck
+  filters:
+    car:
+      min_score: 0.55
+      threshold: 0.75
+    motorcycle:
+      min_score: 0.55
+      threshold: 0.75
+
+# Built-in LPR: YOLOv9 plate detector + PaddleOCR. Requires >=4 GB RAM and AVX/AVX2.
+# https://docs.frigate.video/configuration/license_plate_recognition/
+lpr:
+  enabled: true
+  # Minimum plate area in px^2 before OCR runs. Default 1000.
+  # CALIBRAR: measure the real plate size in the gate footage before trusting this.
+  min_area: 1500
+  # Minimum OCR confidence Frigate keeps. Deliberately permissive: filtering happens
+  # downstream in edge_agent, which has the domain rules to judge a reading properly.
+  recognition_threshold: 0.60
+  # known_plates is intentionally NOT used. The vehicle registry lives in Postgres;
+  # duplicating it in YAML would guarantee drift.
+
+record:
+  enabled: true
+  retain:
+    days: 7
+    mode: motion
+  alerts:
+    retain:
+      days: 30
+  detections:
+    retain:
+      days: 30
+
+snapshots:
+  enabled: true
+  timestamp: false
+  bounding_box: true
+  retain:
+    default: 30
+
+cameras:
+  porteria_entrada:
+    ffmpeg:
+      inputs:
+        - path: rtsp://rtsp-sim:8554/entrada
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+            - record
+      hwaccel_args: []
+    detect:
+      width: 1280
+      height: 720
+      fps: 5
+    motion:
+      threshold: 30
+      contour_area: 15
+    # CALIBRAR: this zone is a placeholder. Redraw it over a real frame in the Frigate UI
+    # (Settings > Masks & Zones). Later it can be generated automatically by DBSCAN over
+    # historical plate positions — see docs/01-teoria-modelos.md section 10.
+    zones:
+      carril:
+        coordinates: 0.15,1.0,0.15,0.35,0.85,0.35,0.85,1.0
+
+  porteria_salida:
+    ffmpeg:
+      inputs:
+        - path: rtsp://rtsp-sim:8554/salida
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+            - record
+      hwaccel_args: []
+    detect:
+      width: 1280
+      height: 720
+      fps: 5
+    motion:
+      threshold: 30
+      contour_area: 15
+    zones:
+      carril:
+        coordinates: 0.15,1.0,0.15,0.35,0.85,0.35,0.85,1.0
+
+version: 0.16-0

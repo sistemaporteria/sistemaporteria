@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+
+# Secrets
+.env
+.env.local
+*.key
+*.pem
+
+# Datasets and media (heavy, never commit)
+datasets/raw/**
+datasets/processed/**
+!datasets/**/.gitkeep
+!datasets/**/README.md
+infra/edge/media/**
+!infra/edge/media/.gitkeep
+*.mp4
+*.mkv
+*.avi
+
+# Frigate runtime state
+infra/edge/frigate/storage/
+infra/edge/frigate/config/config.db*
+infra/edge/mosquitto/data/
+infra/edge/mosquitto/log/
+
+# Local edge agent state
+services/edge_agent/outbox.db*
+
+# Models (downloaded, not committed)
+models/
+*.onnx
+*.pt
+
+# OS / editors
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
