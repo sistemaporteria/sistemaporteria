@@ -181,23 +181,46 @@ Actualizado: 2026-07-25
 | Componente | Estado |
 |---|---|
 | Estructura del repo, git, docs base | ✅ hecho |
-| `packages/plate_rules` (dominio de placas) | ✅ hecho, con tests |
-| `infra/edge` (Frigate + Mosquitto + video loop) | ✅ hecho, sin verificar en ejecución |
+| `packages/plate_rules` (dominio de placas) | ✅ 62 tests |
+| `packages/plate_synth` (placas sintéticas) | ✅ 21 tests |
+| `scripts/eval_ocr.py` + medición del OCR | ✅ **medido**, ver [docs/05-evaluacion.md](docs/05-evaluacion.md) |
+| `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ escrito, ⚠️ sin verificar en ejecución |
+| Video de prueba (detector de vehículos) | ✅ descargado |
+| Esquema de BD (SQL con RLS) | ✅ escrito, ⬜ sin aplicar en Supabase |
 | `services/edge_agent` | ⬜ pendiente |
-| Esquema de BD + Supabase | ⬜ pendiente |
 | `services/api` | ⬜ pendiente |
 | `apps/web` | ⬜ pendiente |
-| Descarga de datasets | ⬜ pendiente |
-| Calibración con datos reales | ⬜ pendiente (requiere video de la portería) |
+| Detector de placas (modelo 2) — evaluación | ⬜ pendiente |
+| Calibración con datos reales | ⬜ bloqueado: requiere video de la portería |
+
+**Bloqueos activos:**
+
+1. **Supabase**: la anon key entregada devuelve **401**. Probablemente las *legacy JWT keys*
+   están deshabilitadas y hay que usar las nuevas (`sb_publishable_...`), o habilitarlas en
+   Settings → API Keys. El esquema `services/api/migrations/0001_initial_schema.sql` debe
+   ejecutarse desde el SQL Editor (ninguna clave anon puede ejecutar DDL).
+2. **Sin video real de la portería** → todo lo marcado `CALIBRAR` sigue sin medir.
 
 **Siguiente paso:** `services/edge_agent` — suscriptor MQTT que aplica `plate_rules` y
-persiste en el outbox local.
+persiste en el outbox SQLite local.
 
 ---
 
 ## 8. Entorno de desarrollo
 
 - Windows 11, PowerShell. Docker 29.5.3, Python 3.12.10, git 2.53.
-- No hay cámaras: se alimenta Frigate con un archivo de video en loop
-  (`-re -stream_loop -1`). Ver `infra/edge/README.md`.
-- Sin remoto de git por ahora.
+- Remoto: `https://github.com/sistemaporteria/sistemaporteria.git` (**público**), cuenta
+  `Juanma0247` autenticada por `gh`.
+- Un solo venv en la raíz (`.venv`) para scripts y evaluación; `packages/plate_rules/.venv`
+  existe para correr el dominio aislado y comprobar que no arrastra dependencias.
+- No hay cámaras: se alimenta Frigate con archivos de video servidos por RTSP en loop.
+  Ver `infra/edge/README.md`.
+
+### Seguridad — el repo es PÚBLICO
+
+- Claves reales solo en `.env.local` (ignorado). `.env.example` va con valores vacíos.
+- La **anon key es pública por diseño** (viaja en el bundle del navegador). Lo que protege
+  los datos es **RLS**, no el secreto de la clave. Por eso el esquema activa RLS en todas las
+  tablas y **nunca debe desactivarse**: la base contiene datos personales bajo la Ley 1581.
+- La **service_role / secret key nunca sale del servidor** ni se pega en un chat. Salta RLS.
+- Los datasets no se redistribuyen: RodoSol y UFPR tienen licencias que lo prohíben.

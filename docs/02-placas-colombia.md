@@ -209,17 +209,26 @@ cruzada sobre el resultado final.
 
 ## 7. Cómo *debería* verse una placa para que esto funcione
 
-Requisitos ópticos que condicionan la instalación en sitio:
+Requisitos ópticos que condicionan la instalación en sitio. **Los valores marcados 📊 salen
+de la medición documentada en [05-evaluacion.md](05-evaluacion.md)**, no de reglas generales.
 
 | Parámetro | Valor objetivo | Por qué |
 |---|---|---|
-| Ancho de la placa en la imagen | **≥ 100 px** (mínimo absoluto ~70 px) | Debajo de eso el OCR degrada rápido. Frigate lo filtra con `min_area` (default 1000 px²). |
-| Ángulo horizontal respecto al plano de la placa | **< 30°** | Más allá, la perspectiva deforma los caracteres |
-| Ángulo vertical | **< 30°** | idem |
-| Obturador (shutter) | **fijo, 1/500–1/1000 s** | El *motion blur* es el asesino nº1 del OCR. Más importante que los megapíxeles. |
-| WDR / HDR | **≥ 120 dB** | En las fotos de referencia el cielo está quemado; sin WDR el vehículo entra en silueta |
+| Obturador (shutter) | **fijo, 1/500–1/1000 s** | 📊 **La prioridad nº 1.** El motion blur es el *único* factor con acantilado real: a k=13 la exactitud cae 45%, a k=17 cae 95%. Más importante que los megapíxeles. |
+| Ancho de la placa en la imagen | **≥ 80 px** (acantilado bajo 60 px) | 📊 A 40 px cae 32%; a partir de 60 px la curva es plana. El OCR redimensiona internamente a 64×128, así que más resolución no aporta. Se pide 80 px por margen. |
+| Ángulo horizontal (yaw) | **< 50°** | 📊 Sin degradación medible hasta 50°; a 60° cae 7,5%. Mucho más tolerante de lo que suele afirmarse. |
+| Ángulo vertical (pitch) | **< 50°** | 📊 Sin efecto medible en todo el rango probado. |
+| WDR / HDR | **≥ 120 dB** | En las fotos de referencia el cielo está quemado; sin WDR el vehículo entra en silueta. 📊 La iluminación extrema cuesta ~5%. |
 | Altura de montaje | 1.5–2.5 m, apuntando ligeramente abajo | Saca el cielo del encuadre |
 | Iluminación nocturna | IR | Las placas son retrorreflectivas |
+| Compresión / bitrate | puede ser agresiva | 📊 Sin degradación ni a calidad JPEG 15. Permite recortar el costo de almacenamiento. |
+
+**Cómo leer esta tabla al comprar:** gastar en obturador rápido y WDR, no en resolución ni en
+un montaje geométricamente perfecto. Esa es la conclusión práctica de la medición.
+
+> ⚠️ Los números 📊 se midieron sobre **placas sintéticas** y con `fast-plate-ocr`, no con el
+> PaddleOCR que usa Frigate. Son válidos como *ranking relativo entre factores*; los valores
+> absolutos son optimistas. Ver las cinco limitaciones en [05-evaluacion.md §3](05-evaluacion.md).
 
 **Motos:** en Colombia las motos llevan **solo placa trasera**. Una cámara de entrada que
 mira de frente **no leerá motos**. Decisión pendiente para producción: cámara adicional

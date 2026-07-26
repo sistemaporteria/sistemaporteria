@@ -143,3 +143,117 @@ docker exec -it porteria-mosquitto mosquitto_sub -t 'frigate/#' -v
 **Estado: escrito, no verificado en ejecución** — faltan los videos de prueba. Los parámetros
 marcados `CALIBRAR` (`min_area`, zonas, `fps`, umbral de movimiento) son puntos de partida
 razonados, no mediciones.
+
+---
+
+## 2026-07-25 — Datos de prueba para los tres modelos, y medición real del OCR
+
+**Qué se hizo**
+
+1. `datasets/scripts/download_video_assets.py` — descarga `vehicles.mp4` (4K, 22 s) y
+   `vehicles-2.mp4` (1080p, 43 s) del catálogo de supervision.
+2. `packages/plate_synth` — generador de placas colombianas sintéticas:
+   - `render.py`: dibuja placas válidas del catálogo (particular amarilla, público blanca,
+     oficial verde, moto amarilla) con colores y formatos correctos.
+   - `degrade.py`: ocho degradaciones controladas — ancho, motion blur, desenfoque, yaw,
+     pitch, iluminación, ruido, compresión JPEG.
+   - `dataset.py`: escribe sets etiquetados con manifiesto JSON.
+3. `scripts/eval_ocr.py` — harness de evaluación con barridos y baseline.
+4. `ruff.toml` en la raíz, para que los scripts fuera de paquetes también usen 2 espacios.
+
+**Por qué: el hallazgo que forzó esta estrategia**
+
+Se descargó el video público esperando probar el pipeline completo. **Ambos videos son tomas
+desde un puente sobre autopista: las placas miden ~10 px.** Sirven para el detector de
+vehículos y para nada más.
+
+No es mala suerte, es la norma — el video de tráfico público se graba para *contar*
+vehículos, no para *leer* placas. De ahí la separación en tres niveles: video real para el
+modelo 1, sintético para el modelo 3, y composición pendiente para el modelo 2.
+
+**Tres bugs encontrados y corregidos durante la construcción**
+
+1. *La fuente se dimensionaba solo por altura* → el texto desbordaba el ancho de la placa.
+   Corregido con `_fit_font`, que ajusta a ambas dimensiones.
+2. *El warp de perspectiva trasladaba la placa en vez de escorzarla.* Una placa rotada no se
+   mueve de sitio: su borde lejano se acorta. Reemplazado por un modelo pinhole con división
+   perspectiva real. Importaba: de ese barrido sale la especificación angular de la cámara, y
+   el modelo ingenuo la habría hecho falsamente estricta.
+3. *La banda "COLOMBIA" era demasiado alta en el formato moto* (34% del alto) → el OCR leía
+   dentro de ella y añadía caracteres fantasma (`DOF38U` → `DOF38UG`). Reducida al 20%. El
+   baseline subió de ~85% a 97,5%.
+
+**Resultados medidos** — `cct-xs-v2-global-model`, n=40, baseline 97,5%
+
+| Factor | Efecto | Veredicto |
+|---|---|---|
+| Motion blur | k=13: **−45%**, k=17: **−95%** | 🔴 el único con acantilado real |
+| Ancho de placa | 40 px: −32,5%; ≥60 px: plano | 🟡 acantilado bajo 60 px |
+| Yaw / pitch | plano hasta 50° | 🟢 mucho más tolerante de lo asumido |
+| Desenfoque, ruido, JPEG | sin efecto medible | 🟢 |
+
+**Consecuencia directa: se corrigió la especificación de cámara.** Se había documentado
+"≥100 px" y "<30°" por regla general. La medición dice **≥80 px** y **<50°**, y que el
+obturador rápido importa más que todo lo demás junto. Ver [05-evaluacion.md](05-evaluacion.md)
+y [02-placas-colombia.md §7](02-placas-colombia.md).
+
+**Un resultado negativo que también se reporta:** la columna `+ dominio` salió idéntica al OCR
+crudo. La coerción por máscara no aporta exactitud con este modelo, porque cuando falla
+sustituye un carácter por otro del mismo tipo y la cadena sigue cumpliendo la máscara. El
+valor de `plate_rules` es **precisión** (rechazar basura, detectar conflictos), no
+**cobertura**. A motion blur k=17 rechazó 20/40 lecturas inválidas que de otro modo habrían
+entrado a la base de datos.
+
+**Cómo se prueba**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install supervision opencv-python-headless pillow numpy "fast-plate-ocr[onnx]" pytest ruff
+.\.venv\Scripts\python.exe datasets\scripts\download_video_assets.py
+.\.venv\Scripts\python.exe scripts\eval_ocr.py --samples 40
+.\.venv\Scripts\python.exe -m pytest packages -q      # 83 tests
+```
+
+**Limitaciones declaradas:** placas sintéticas (más limpias que la realidad), artefacto
+tipográfico con la letra `I`, y se midió `fast-plate-ocr` y no el PaddleOCR que usa Frigate.
+Las cinco limitaciones completas están en [05-evaluacion.md §3](05-evaluacion.md).
+
+---
+
+## 2026-07-25 — Repositorio remoto y esquema de base de datos
+
+**Qué se hizo**
+
+- Remoto `https://github.com/sistemaporteria/sistemaporteria.git` conectado y `main` publicado.
+- `services/api/migrations/0001_initial_schema.sql` — esquema completo: `profiles`, `owners`,
+  `vehicles`, `cameras`, `access_events`, vista `parking_sessions`, RLS en todas las tablas y
+  función de retención de imágenes.
+- `.env.example` (versionado, sin valores) y `.env.local` (ignorado, con la anon key).
+
+**Decisiones de diseño del esquema**
+
+- **`parking_sessions` es una VISTA, no una tabla.** Empareja cada entrada con la siguiente
+  salida de la misma placa usando `lead()`. Así, cuando un guardia corrige una placa mal
+  leída, todas las sesiones se recalculan solas en vez de quedar filas huérfanas apuntando a
+  un vehículo inexistente.
+- **`corrected_plate` junto a `plate_read`.** Nunca se sobrescribe la lectura automática: se
+  necesita para auditar el sistema y para alimentar el reentrenamiento.
+- **Índice único de deduplicación** por `(cámara, placa, minuto)` y otro por
+  `frigate_event_id`, que hace la ingesta idempotente cuando el agente reenvía tras un corte
+  de red.
+- **La imagen se guarda como URL, no como blob**, para poder migrar de Supabase Storage a
+  Cloudflare R2 sin tocar datos (ver el problema de 3,1 GB/mes en
+  [00-arquitectura.md §5](00-arquitectura.md)).
+
+**Seguridad: por qué RLS no es opcional aquí**
+
+El repositorio es **público** y la anon key es **pública por diseño** (viaja en el bundle del
+navegador). Lo único que impide que cualquiera lea y escriba la base de datos es **RLS**. Y la
+base contiene datos personales bajo la Ley 1581 de 2012. Por eso el esquema activa RLS en las
+cinco tablas antes de crear cualquier política, y los guardias solo pueden *actualizar* la
+cola de revisión — la creación de eventos es exclusiva de `services/api`, que usa la clave de
+servicio del lado del servidor.
+
+**Estado: bloqueado.** La anon key entregada devuelve **HTTP 401** contra
+`/rest/v1/`. Lo más probable es que las *legacy JWT keys* estén deshabilitadas y el proyecto
+use las nuevas `sb_publishable_...`. El esquema no se ha aplicado.

@@ -1,0 +1,19 @@
+# Repository-wide lint and format settings. Package-level pyproject.toml files inherit
+# nothing from here, so they repeat the same values; this file covers scripts/ and anything
+# outside a package.
+line-length = 96
+indent-width = 2
+target-version = "py311"
+
+exclude = [".venv", "datasets/raw", "datasets/processed", "infra/edge/frigate/storage"]
+
+[format]
+indent-style = "space"
+quote-style = "double"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[lint.per-file-ignores]
+# Standalone scripts insert the package paths into sys.path before importing them.
+"scripts/*.py" = ["E402"]
