@@ -406,3 +406,82 @@ vista se convierte en la puerta trasera de la tabla. Añadida a las reglas de tr
 .\.venv\Scripts\python.exe scripts\run_migration.py --list-tables
 .\.venv\Scripts\python.exe scripts\run_migration.py services\api\migrations\verify_schema.sql
 ```
+
+---
+
+## 2026-07-26 — `services/edge_agent`: de MQTT a eventos de acceso
+
+**Qué se hizo**
+
+| Módulo | Responsabilidad |
+|---|---|
+| `frigate.py` | Parsea `frigate/events` y `frigate/tracked_object_update` |
+| `models.py` | `TrackedObject` (estado en vuelo) y `AccessEvent` (lo que se persiste) |
+| `pipeline.py` | Acumula lecturas por objeto, agrega, clasifica, verifica y deduplica |
+| `outbox.py` | Cola SQLite transaccional |
+| `transport.py` | Interfaz `Sink` + implementación HTTP + sincronizador con reintentos |
+| `main.py` | Bucle MQTT, modo `--replay` y `--status` |
+| `config.py` | Umbrales con su justificación; mapa cámara → dirección |
+
+**El formato MQTT se consultó, no se supuso.** Los campos vienen de la
+[documentación de Frigate](https://docs.frigate.video/integrations/mqtt/): `frigate/events`
+trae `type: new|update|end` con `before`/`after`, y dentro de `after` están
+`recognized_license_plate`, `recognized_license_plate_score` y —clave para la verificación
+cruzada— `label` con `car` o `motorcycle`. `frigate/tracked_object_update` con `type: "lpr"`
+publica cada refinamiento individual de la placa.
+
+**Decisiones**
+
+- **Se emite en `end`, no en cada `update`.** Frigate refina la placa mientras el vehículo se
+  mueve. Mientras tanto el agente acumula los mensajes `lpr` y al cerrar corre su propia
+  votación ponderada. Frigate ya hace una agregación interna, pero no expone las lecturas
+  individuales en el evento final; recolectarlas mantiene el control del criterio y protege
+  de que Frigate cambie su estrategia.
+- **Un vehículo sin lectura también genera evento**, marcado para revisión. Un paso ilegible
+  es información: descartarlo escondería una cámara degradándose.
+- **Deduplicación en dos capas**: ventana en memoria en el agente, restricción de exclusión
+  en Postgres. El agente se reinicia y pierde su estado; la base no.
+- **`frigate_event_id` viaja en cada evento.** MQTT entrega *al menos una vez*, así que el
+  mismo evento puede llegar dos veces; ese id hace la ingesta idempotente en ambas capas.
+- **Un mensaje mal formado nunca tumba el agente.** El parser devuelve `None` en vez de
+  lanzar, y el handler MQTT atrapa todo: un broker puede entregar cualquier cosa, y no puede
+  costar el resto del turno.
+
+**Verificación de extremo a extremo**
+
+`tests/fixtures/porteria_demo.jsonl` es una sesión grabada de 21 mensajes con seis pasos de
+vehículo. Ejecutada con `--replay`:
+
+```
+porteria_entrada in  placa=KEM018 conf=1.00 veredicto=confirmed            revision=False
+porteria_entrada in  placa=HCR605 conf=0.60 veredicto=conflict             revision=True
+porteria_entrada in  placa=-      conf=0.50 veredicto=unrecognized_pattern revision=True
+porteria_entrada in  placa=-      conf=0.00 veredicto=unrecognized_pattern revision=True
+porteria_entrada in  placa=KEM018 conf=0.95 veredicto=confirmed            revision=False
+porteria_salida  out placa=KEM018 conf=0.97 veredicto=confirmed            revision=False
+outbox: {'pendientes': 6, 'enviados': 0, 'total': 6}
+```
+
+Cada línea es un comportamiento distinto: agregación limpia, **moto cuya lectura entra en
+conflicto con lo que ve la cámara**, placa extranjera rechazada en vez de inventada, paso
+ilegible registrado igual, y una entrada emparejada con su salida por la cámara de salida. El
+`person` del final se ignoró correctamente.
+
+**Un test falló y el código tenía razón.** Esperaba `frames_agreed == 3` sobre las lecturas
+`KEM018, KEM0I8, KEM018, KEM018`, asumiendo que la lectura mala sería *superada en votos*.
+Salió 4: contra la máscara `LLLNNN`, la `I` en casilla numérica se coerce a `1`, así que
+`KEM0I8` **se repara** a `KEM018` y las cuatro concuerdan. Corregí la expectativa del test,
+no el código. Es la coerción por máscara funcionando dentro del pipeline completo, no solo en
+los tests unitarios de `plate_rules`.
+
+**Cómo se prueba**
+
+```powershell
+$env:PYTHONPATH="packages\plate_rules\src;services\edge_agent\src"
+python -m edge_agent --replay services\edge_agent\tests\fixtures\porteria_demo.jsonl
+python -m pytest packages services -q      # 151 tests
+```
+
+**Pendiente:** el `Sink` por defecto solo escribe al log porque `services/api` todavía no
+existe. La estimación de color sigue desactivada: requiere traer el snapshot de Frigate y
+volver a detectar la placa (MQTT no publica su caja), y los umbrales HSV no están calibrados.

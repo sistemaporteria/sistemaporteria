@@ -195,7 +195,7 @@ Actualizado: 2026-07-25
 | Video de prueba: vehículos + **placas legibles** | ✅ descargado |
 | `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ escrito, ⚠️ sin verificar en ejecución |
 | Esquema de BD en Supabase | ✅ **aplicado y verificado** (migraciones 0001 + 0002) |
-| `services/edge_agent` | ⬜ pendiente |
+| `services/edge_agent` | ✅ 60 tests, verificado con sesión grabada |
 | `services/api` | ⬜ pendiente |
 | `apps/web` | ⬜ pendiente |
 | Detector de placas (modelo 2) — métrica IoU | ⬜ pendiente |
@@ -215,8 +215,7 @@ las cinco tablas, lectura y escritura anónimas bloqueadas, deduplicado y vista 
 
 **Bloqueo activo:** sin video real de la portería, todo lo marcado `CALIBRAR` sigue sin medir.
 
-**Siguiente paso:** `services/edge_agent` — suscriptor MQTT que aplica `plate_rules` y
-persiste en el outbox SQLite local.
+**Siguiente paso:** `services/api` — FastAPI que recibe los eventos del agente y los persiste en Supabase. Hoy el `Sink` del agente solo escribe al log.
 
 ---
 
