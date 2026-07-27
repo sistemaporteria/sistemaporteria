@@ -328,3 +328,81 @@ distribución. Los datos sintéticos miden sensibilidad; **no encuentran errores
 .\.venv\Scripts\python.exe scripts\probe_video_alpr.py datasets\raw\video\alpr_video1.mp4 --every 8
 .\.venv\Scripts\python.exe -m pytest packages -q      # 91 tests
 ```
+
+---
+
+## 2026-07-26 — Migración aplicada a Supabase, y una fuga de RLS encontrada al verificarla
+
+**Qué se hizo**
+
+- `scripts/run_migration.py` — aplica migraciones vía Management API con un Personal Access
+  Token. Las credenciales se leen de `.env.local`, nunca de `argv`, para que no queden en el
+  historial del shell.
+- Migración `0001` aplicada al proyecto `mhqyonldsvlyxebdmjse`.
+- Migración `0002` — corrige una fuga de RLS descubierta al verificar.
+- `verify_schema.sql` — consulta de solo lectura que reporta tablas, RLS, políticas e índices.
+
+**Tres errores corregidos antes de que la migración pasara**
+
+1. **`to_tsvector('spanish', full_name)` en un índice GIN.** La variante
+   `to_tsvector(text, text)` es STABLE, no IMMUTABLE, porque la configuración podría
+   resolverse distinto según la sesión. Corregido con el cast explícito
+   `'spanish'::regconfig`, que sí es IMMUTABLE.
+
+2. **`date_trunc('minute', occurred_at)` en el índice de deduplicación.** Mismo problema:
+   `date_trunc(text, timestamptz)` depende del TimeZone de la sesión. Pero al replantearlo
+   apareció un defecto de diseño peor: **agrupar por minuto es incorrecto**. Dos lecturas
+   separadas por 2 segundos que caen a ambos lados de un cambio de minuto quedan en cubetas
+   distintas y ambas pasan el filtro. Reemplazado por una **restricción de exclusión** con
+   `btree_gist` que mide la distancia real entre eventos.
+
+3. **`timestamptz ± interval` tampoco es IMMUTABLE**, porque el resultado depende de las
+   reglas de horario de verano. Se resuelve convirtiendo primero a `timestamp` plano con
+   `at time zone 'UTC'` —conversión inmutable con zona literal— y haciendo la aritmética
+   sobre el resultado.
+
+4. Fallo de robustez del runner: PowerShell escribe UTF-8 **con BOM**, y Postgres rechaza el
+   BOM como error de sintaxis. El script ahora lee con `utf-8-sig`.
+
+**La fuga de RLS**
+
+`verify_schema.sql` mostró las cinco tablas con `relrowsecurity = true`... y la vista
+`parking_sessions` con `false` y cero políticas.
+
+En PostgreSQL una vista se evalúa por defecto con los privilegios de su **dueño**, no de quien
+consulta. Como la creó un rol privilegiado, **leerla saltaba por completo el RLS de
+`access_events`**. Comprobado empíricamente alternando el ajuste (la base solo tenía datos de
+prueba):
+
+```
+security_invoker = off  -> lectura anonima: HTTP 200 [{"plate":"ABC123","entered_at":...},
+                                                      {"plate":"XYZ789","entered_at":...}]
+security_invoker = on   -> lectura anonima: HTTP 200 []
+```
+
+Con la clave publishable —que es pública por diseño y este repositorio es público— cualquiera
+podía obtener el histórico completo de entradas y salidas consultando la vista en lugar de la
+tabla. Corregido en `0002`.
+
+**Regla que queda:** toda vista sobre una tabla con RLS debe declarar `security_invoker`, o la
+vista se convierte en la puerta trasera de la tabla. Añadida a las reglas de trabajo.
+
+**Verificación final ejecutada**
+
+| Prueba | Resultado |
+|---|---|
+| RLS en las 5 tablas | ✅ activo, con políticas (3 en `access_events`, 2 en el resto) |
+| Lectura anónima de las 5 tablas + la vista | ✅ `[]` con datos presentes en la base |
+| Escritura anónima en `owners` | ✅ rechazada, `42501 new row violates row-level security policy` |
+| Control de conectividad | ✅ `404 PGRST205` en tabla inexistente — el endpoint responde |
+| Vista `parking_sessions` | ✅ `ABC123` 08:00→17:30 duración 9h30m; `XYZ789` sesión abierta |
+| Deduplicado a +40 s | ✅ rechazado, `23P01 conflicting key value violates exclusion constraint` |
+| Paso legítimo a +120 s | ✅ aceptado |
+| Limpieza | ✅ 0 eventos, 0 vehículos, 0 dueños; quedan las 2 cámaras sembradas |
+
+**Cómo se prueba**
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_migration.py --list-tables
+.\.venv\Scripts\python.exe scripts\run_migration.py services\api\migrations\verify_schema.sql
+```

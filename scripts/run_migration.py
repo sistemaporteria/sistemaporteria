@@ -61,6 +61,10 @@ def run_query(project_ref: str, token: str, sql: str) -> tuple[int, str]:
     headers={
       "Authorization": f"Bearer {token}",
       "Content-Type": "application/json",
+      # The Management API sits behind Cloudflare, which rejects urllib's default
+      # User-Agent with a 403 "error code: 1010".
+      "User-Agent": "porteria-migrator/1.0",
+      "Accept": "application/json",
     },
     method="POST",
   )
@@ -92,7 +96,9 @@ def main() -> int:
     if not args.migration.exists():
       print(f"no existe: {args.migration}", file=sys.stderr)
       return 1
-    sql = args.migration.read_text(encoding="utf-8")
+    # utf-8-sig strips a BOM if present: Windows editors and PowerShell's Set-Content write
+    # one by default, and Postgres rejects it as a syntax error on the first statement.
+    sql = args.migration.read_text(encoding="utf-8-sig")
   else:
     parser.print_help()
     return 1

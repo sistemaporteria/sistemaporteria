@@ -41,7 +41,8 @@ def main() -> int:
     try:
       print(f"descargando {name} ...")
       urllib.request.urlretrieve(f"{BASE_URL}/{path}", destination)
-      print(f"  -> {destination.relative_to(REPO_ROOT)} ({destination.stat().st_size / 1e6:.1f} MB)")
+      size_mb = destination.stat().st_size / 1e6
+      print(f"  -> {destination.relative_to(REPO_ROOT)} ({size_mb:.1f} MB)")
     except OSError as error:
       print(f"  fallo: {error}", file=sys.stderr)
       failures += 1

@@ -10,6 +10,9 @@
 --   4. RLS activo en TODAS las tablas. Ver la nota de seguridad al final.
 
 create extension if not exists "pgcrypto";
+-- Necesaria para la restricción de exclusión del deduplicado: permite combinar operadores
+-- de igualdad (btree) con solapamiento de rangos (gist) en un mismo índice.
+create extension if not exists "btree_gist";
 
 -- ---------------------------------------------------------------------------
 -- Perfiles y roles
@@ -56,7 +59,11 @@ create table owners (
   updated_at   timestamptz not null default now()
 );
 
-create index owners_full_name_idx on owners using gin (to_tsvector('spanish', full_name));
+-- El cast a regconfig es obligatorio: to_tsvector(text, text) es STABLE porque la
+-- configuración podría resolverse distinto según la sesión, y Postgres rechaza expresiones
+-- no IMMUTABLE en un índice. to_tsvector(regconfig, text) sí es IMMUTABLE.
+create index owners_full_name_idx
+  on owners using gin (to_tsvector('spanish'::regconfig, full_name));
 
 -- Espejo de plate_rules.PlateCategory / VehicleClass. La fuente de verdad es el paquete
 -- Python; aquí se guarda lo que el dominio decidió, no se reimplementa la lógica.
@@ -158,11 +165,31 @@ create index access_events_vehicle_idx on access_events (vehicle_id, occurred_at
 create index access_events_review_idx on access_events (review_status)
   where review_status = 'pending';
 
--- Deduplicación: un vehículo que retrocede o se detiene genera varios tracks. Se rechaza la
--- misma placa en la misma cámara dentro de una ventana corta.
-create unique index access_events_dedup_idx
-  on access_events (camera_id, plate_read, date_trunc('minute', occurred_at))
-  where plate_read is not null;
+-- Deduplicación: un vehículo que retrocede o se detiene ante la talanquera genera varios
+-- tracks, y cada track produce un evento. Se rechaza la misma placa en la misma cámara
+-- dentro de una ventana de 90 s.
+--
+-- Se usa una restricción de EXCLUSIÓN y no un índice único sobre date_trunc por dos razones:
+--   1. date_trunc(text, timestamptz) es STABLE, no IMMUTABLE (depende del TimeZone de la
+--      sesión), así que Postgres no la admite en un índice.
+--   2. Aun si se pudiera, agrupar por minuto es incorrecto: dos lecturas separadas por 2
+--      segundos que caen a ambos lados de un cambio de minuto quedarían en cubetas distintas
+--      y ambas pasarían. La exclusión por solapamiento de rangos mide la distancia real.
+--
+-- El `at time zone 'UTC'` tampoco es cosmético: `timestamptz ± interval` es STABLE, porque el
+-- resultado depende de las reglas de horario de verano vigentes. Convertir primero a
+-- `timestamp` plano —conversión que sí es IMMUTABLE con una zona literal— hace que la
+-- aritmética posterior sea inmutable y la expresión sea indexable.
+alter table access_events add constraint access_events_dedup
+  exclude using gist (
+    camera_id with =,
+    plate_read with =,
+    tsrange(
+      (occurred_at at time zone 'UTC') - interval '45 seconds',
+      (occurred_at at time zone 'UTC') + interval '45 seconds'
+    ) with &&
+  )
+  where (plate_read is not null);
 
 -- El agente del borde reenvía tras un corte de red; el id de Frigate hace la ingesta
 -- idempotente.

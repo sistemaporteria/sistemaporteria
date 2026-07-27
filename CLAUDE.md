@@ -112,6 +112,13 @@ Ver [docs/adr/0002-frigate-vs-pipeline-propio.md](docs/adr/0002-frigate-vs-pipel
    Si se cae internet, no se pierde ningún ingreso.
 7. **Siempre se guarda el evento crudo**, aunque la placa no esté registrada o sea ilegible.
    Esa cola es el insumo del registro de vehículos nuevos y del active learning.
+8. **Toda vista sobre una tabla con RLS debe declarar `security_invoker = on`.** Por defecto
+   una vista de PostgreSQL se evalúa con los privilegios de su dueño y **puentea el RLS de
+   las tablas subyacentes**: se convierte en la puerta trasera de la tabla. Costó una fuga
+   real, verificada, en `parking_sessions` — ver
+   [ADR 0003](docs/adr/0003-rls-y-vistas.md).
+9. **Las migraciones son de solo-añadir.** Una vez aplicada, una migración no se edita: se
+   corrige con otra nueva. Así el historial de git reproduce el estado real de la base.
 
 ---
 
@@ -187,20 +194,24 @@ Actualizado: 2026-07-25
 | `scripts/probe_video_alpr.py` (pipeline sobre video) | ✅ verificado sobre video real |
 | Video de prueba: vehículos + **placas legibles** | ✅ descargado |
 | `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ escrito, ⚠️ sin verificar en ejecución |
-| Esquema de BD (SQL con RLS) | ✅ escrito, ⬜ sin aplicar en Supabase |
+| Esquema de BD en Supabase | ✅ **aplicado y verificado** (migraciones 0001 + 0002) |
 | `services/edge_agent` | ⬜ pendiente |
 | `services/api` | ⬜ pendiente |
 | `apps/web` | ⬜ pendiente |
 | Detector de placas (modelo 2) — métrica IoU | ⬜ pendiente |
 | Calibración con datos reales | ⬜ bloqueado: requiere video de la portería |
 
-**Supabase.** La clave que funciona es la **publishable** (`sb_publishable_...`) en
-`.env.local`; las *legacy JWT keys* del proyecto están deshabilitadas y dan 401. Nota: la
-raíz `/rest/v1/` devuelve 401 incluso con clave válida — para comprobar conectividad hay que
-consultar una tabla (`/rest/v1/<tabla>?select=*`), que responde `PGRST205` si no existe.
+**Supabase** (proyecto `mhqyonldsvlyxebdmjse`). Esquema aplicado y verificado: RLS activo en
+las cinco tablas, lectura y escritura anónimas bloqueadas, deduplicado y vista comprobados.
 
-Pendiente: ejecutar `services/api/migrations/0001_initial_schema.sql` en el SQL Editor
-(ninguna clave de cliente puede ejecutar DDL).
+- La clave de cliente es la **publishable** (`sb_publishable_...`); las *legacy JWT keys* del
+  proyecto están deshabilitadas y devuelven 401.
+- La raíz `/rest/v1/` devuelve 401 **incluso con clave válida**: para comprobar conectividad
+  hay que consultar una tabla, que responde `PGRST205` si no existe.
+- Las migraciones se aplican con `scripts/run_migration.py`, que necesita un Personal Access
+  Token en `SUPABASE_ACCESS_TOKEN`. **Es de alcance de cuenta: crear uno, usarlo y revocarlo.**
+- La Management API está tras Cloudflare y rechaza el `User-Agent` por defecto de `urllib`
+  con `403 error code: 1010`; el script manda uno explícito.
 
 **Bloqueo activo:** sin video real de la portería, todo lo marcado `CALIBRAR` sigue sin medir.
 
