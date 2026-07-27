@@ -485,3 +485,101 @@ python -m pytest packages services -q      # 151 tests
 **Pendiente:** el `Sink` por defecto solo escribe al log porque `services/api` todavía no
 existe. La estimación de color sigue desactivada: requiere traer el snapshot de Frigate y
 volver a detectar la placa (MQTT no publica su caja), y los umbrales HSV no están calibrados.
+
+---
+
+## 2026-07-26 — `services/api` y el circuito cerrado hasta la base de datos
+
+**Qué se hizo**
+
+FastAPI con dos rutas: `GET /health` y `POST /events`. Más `scripts/inspect_events.py` para
+leer de vuelta lo que quedó en la base.
+
+**Alcance deliberadamente mínimo: no hay rutas de lectura.** El panel web hablará directo con
+Supabase usando la publishable key, Auth y RLS. Este servicio existe por una sola razón:
+escribir eventos requiere la *secret key*, y esa clave no puede salir de un servidor. Añadir
+endpoints de lectura sería duplicar lo que Postgres ya resuelve mejor con RLS.
+
+**Decisiones**
+
+- **La placa se revalida en el servidor.** El agente ya normalizó, pero quien decide qué entra
+  a la base es el servidor. Una placa que el dominio rechaza se guarda **solo como `raw_read`**
+  con `plate_read` en NULL, así nada inventado llega a asociarse con un vehículo.
+- **Los conflictos devuelven 200, no 4xx.** `already_recorded` (`23505` sobre
+  `frigate_event_id`, reenvío tras corte) y `duplicate` (`23P01`, mismo paso en <90 s) no son
+  errores: el paso ya está contabilizado. Un código de error haría que el outbox reintentara
+  para siempre algo ya resuelto. En cambio un fallo real de base de datos devuelve **502**,
+  para que el agente sí conserve el evento.
+- **Las violaciones de restricción se traducen en `supabase.py`**, junto al cliente que las
+  produce, no en la ruta.
+- **El token de ingesta no es credencial de usuario**, es un secreto compartido entre una
+  máquina y el servidor. Las personas se autentican contra Supabase Auth y nunca tocan este
+  servicio.
+
+**Dos fallos propios encontrados y corregidos**
+
+1. El estado inyectado se perdía: `TestClient` usado sin su gestor de contexto **no ejecuta el
+   `lifespan`**, así que las rutas no encontraban cliente. Se pobla el estado en `create_app`
+   y el `lifespan` solo construye el cliente real si no hay uno inyectado.
+2. La ruta devolvía 201 también en los conflictos, porque `status_code` es fijo por ruta. Se
+   inyecta `Response` para bajarlo a 200 en ese caso.
+
+**Verificación de extremo a extremo contra la base real**
+
+La primera corrida falló entera —el servidor se había caído— y eso resultó ser la mejor
+demostración posible del outbox:
+
+```
+sincronizados 0, fallidos 6
+outbox: {'pendientes': 6, 'enviados': 0, 'total': 6}
+last_error: [WinError 10061] conexion rechazada
+```
+
+Seis eventos encolados, **ninguno perdido**. Al levantar el API y reintentar los mismos
+registros:
+
+```
+(los 6 se detectan como "duplicado, ya en cola")   <- idempotencia del outbox
+sincronizados 6, fallidos 0
+outbox: {'pendientes': 0, 'enviados': 6, 'total': 6}
+```
+
+Y leído de vuelta desde Postgres:
+
+```
+2026-07-25T17:21:44  porteria_entrada  in  placa=KEM018 crudo=KEM018 confirmed            pending
+2026-07-25T17:23:23  porteria_entrada  in  placa=HCR605 crudo=HCR605 conflict             pending
+2026-07-25T17:25:03  porteria_entrada  in  placa=-      crudo=29UM92 unrecognized_pattern pending
+2026-07-25T17:26:42  porteria_entrada  in  placa=-      crudo=-      unrecognized_pattern pending
+2026-07-25T17:27:12  porteria_entrada  in  placa=KEM018 crudo=KEM018 confirmed            pending
+2026-07-26T01:40:02  porteria_salida   out placa=KEM018 crudo=KEM018 confirmed            pending
+
+parking_sessions:
+  KEM018  entro=2026-07-25T17:27:12  cerrada (08:12:50)
+```
+
+La placa portuguesa quedó **solo en `raw_read`**, con `plate_read` en NULL: la revalidación
+del servidor hizo su trabajo. Y la vista emparejó sola la entrada con su salida.
+
+Todo en `review_status = pending` porque la tabla `vehicles` está vacía: sin vehículos
+registrados, toda placa es desconocida y va a la cola de revisión. Es el comportamiento
+correcto, y es justo la cola desde la que el guardia dará de alta los vehículos.
+
+Los datos de demo se borraron después (`--purge-demo`); la base quedó en 0 eventos.
+
+**Cómo se prueba**
+
+```powershell
+# 1. levantar el API
+$env:PYTHONPATH="packages\plate_rules\src;services\api\src"
+python -m uvicorn porteria_api.main:app --port 8000
+
+# 2. circuito completo desde una sesion grabada
+$env:PYTHONPATH="packages\plate_rules\src;services\edge_agent\src"
+python -m edge_agent --replay services\edge_agent\tests\fixtures\porteria_demo.jsonl --sync
+
+# 3. leer de vuelta
+python scripts\inspect_events.py
+
+python -m pytest packages services -q      # 174 tests
+```

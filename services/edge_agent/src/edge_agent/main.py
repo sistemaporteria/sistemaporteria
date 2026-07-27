@@ -46,11 +46,12 @@ def build_pipeline(config: Config, outbox: Outbox) -> Pipeline:
   return Pipeline(config, emit)
 
 
-def run_replay(config: Config, path: Path) -> int:
+def run_replay(config: Config, path: Path, sync: bool = False) -> int:
   """Feed recorded MQTT messages through the pipeline.
 
   Each line is `{"topic": "...", "payload": {...}}`. This is what makes the agent testable
-  without a broker, a camera or Frigate.
+  without a broker, a camera or Frigate. With --sync it also drains the outbox, exercising
+  the whole chain down to the database.
   """
   outbox = Outbox(config.outbox_path)
   pipeline = build_pipeline(config, outbox)
@@ -68,6 +69,11 @@ def run_replay(config: Config, path: Path) -> int:
 
   logger.info("reproducidos %d mensajes", processed)
   logger.info("outbox: %s", outbox.counts())
+
+  if sync:
+    delivered, failed = Synchronizer(outbox, build_sink(config)).drain()
+    logger.info("sincronizados %d, fallidos %d", delivered, failed)
+    logger.info("outbox: %s", outbox.counts())
   return 0
 
 
@@ -81,6 +87,23 @@ def _dispatch(pipeline: Pipeline, config: Config, topic: str, payload: str) -> N
     message = parse_tracked_object_update(payload)
     if message:
       pipeline.handle_lpr(message)
+
+
+def _background_loop(
+  synchronizer: Synchronizer, pipeline: Pipeline, stopping: threading.Event
+) -> None:
+  """Drain the outbox and drop stale objects, on a timer, off the MQTT thread."""
+  last_prune = time.monotonic()
+  while not stopping.wait(SYNC_INTERVAL_SECONDS):
+    delivered, failed = synchronizer.drain()
+    if delivered or failed:
+      logger.info("sincronizados %d, fallidos %d", delivered, failed)
+    stuck = synchronizer.stuck()
+    if stuck:
+      logger.error("%d eventos atascados tras agotar reintentos: %s", len(stuck), stuck[:5])
+    if time.monotonic() - last_prune > PRUNE_INTERVAL_SECONDS:
+      pipeline.prune()
+      last_prune = time.monotonic()
 
 
 def run_mqtt(config: Config) -> int:
@@ -117,20 +140,12 @@ def run_mqtt(config: Config) -> int:
   client.on_connect = on_connect
   client.on_message = on_message
 
-  def background() -> None:
-    last_prune = time.monotonic()
-    while not stopping.wait(SYNC_INTERVAL_SECONDS):
-      delivered, failed = synchronizer.drain()
-      if delivered or failed:
-        logger.info("sincronizados %d, fallidos %d", delivered, failed)
-      stuck = synchronizer.stuck()
-      if stuck:
-        logger.error("%d eventos atascados tras agotar reintentos: %s", len(stuck), stuck[:5])
-      if time.monotonic() - last_prune > PRUNE_INTERVAL_SECONDS:
-        pipeline.prune()
-        last_prune = time.monotonic()
-
-  worker = threading.Thread(target=background, daemon=True, name="sync")
+  worker = threading.Thread(
+    target=_background_loop,
+    args=(synchronizer, pipeline, stopping),
+    daemon=True,
+    name="sync",
+  )
   worker.start()
 
   def shutdown(_signum, _frame) -> None:
@@ -150,6 +165,7 @@ def run_mqtt(config: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--replay", type=Path, help="reproducir mensajes grabados (JSONL)")
+  parser.add_argument("--sync", action="store_true", help="con --replay: drenar el outbox")
   parser.add_argument("--status", action="store_true", help="mostrar estado del outbox")
   parser.add_argument("--verbose", action="store_true")
   args = parser.parse_args(argv)
@@ -165,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(Outbox(config.outbox_path).counts(), indent=2))
     return 0
   if args.replay:
-    return run_replay(config, args.replay)
+    return run_replay(config, args.replay, sync=args.sync)
   return run_mqtt(config)
 
 
