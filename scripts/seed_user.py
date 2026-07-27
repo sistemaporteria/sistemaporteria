@@ -67,7 +67,9 @@ def main() -> int:
       json={"email": args.email, "password": password, "email_confirm": True},
     )
     if created.status_code >= 300:
-      print(f"fallo creando usuario: {created.status_code} {created.text[:300]}", file=sys.stderr)
+      print(
+        f"fallo creando usuario: {created.status_code} {created.text[:300]}", file=sys.stderr
+      )
       return 1
     user_id = created.json()["id"]
 
@@ -81,7 +83,9 @@ def main() -> int:
       },
     )
     if profile.status_code >= 300:
-      print(f"fallo creando perfil: {profile.status_code} {profile.text[:300]}", file=sys.stderr)
+      print(
+        f"fallo creando perfil: {profile.status_code} {profile.text[:300]}", file=sys.stderr
+      )
       return 1
 
     print(f"usuario creado: {args.email}  rol={args.role}")
