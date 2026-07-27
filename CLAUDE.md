@@ -197,7 +197,7 @@ Actualizado: 2026-07-25
 | Esquema de BD en Supabase | ✅ **aplicado y verificado** (migraciones 0001 + 0002) |
 | `services/edge_agent` | ✅ 60 tests, verificado con sesión grabada |
 | `services/api` | ✅ 23 tests, circuito verificado contra la base real |
-| `apps/web` | ⬜ pendiente |
+| `apps/web` | ✅ 5 rutas, RLS verificado desde el navegador |
 | Detector de placas (modelo 2) — métrica IoU | ⬜ pendiente |
 | Calibración con datos reales | ⬜ bloqueado: requiere video de la portería |
 
@@ -215,7 +215,7 @@ las cinco tablas, lectura y escritura anónimas bloqueadas, deduplicado y vista 
 
 **Bloqueo activo:** sin video real de la portería, todo lo marcado `CALIBRAR` sigue sin medir.
 
-**Siguiente paso:** `apps/web` — panel Next.js para guardias (cola de revisión, registro de vehículo y dueño) y administración (histórico, reportes). Habla directo con Supabase: publishable key + Auth + RLS, sin pasar por la API.
+**Siguiente paso:** calibración con video real de la portería (bloqueado), Realtime en el tablero, y exportación CSV para administración.
 
 ---
 

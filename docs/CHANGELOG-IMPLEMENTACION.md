@@ -583,3 +583,84 @@ python scripts\inspect_events.py
 
 python -m pytest packages services -q      # 174 tests
 ```
+
+---
+
+## 2026-07-27 — `apps/web`: el panel, y RLS verificado desde fuera
+
+**Qué se hizo**
+
+Next.js 16 + React 19 + TypeScript + Tailwind. Cinco rutas: `/login`, tablero, `/revision`,
+`/historial`, `/vehiculos`. Más `scripts/seed_user.py`, que crea una cuenta de Auth **y** su
+fila en `profiles`.
+
+**El panel no pasa por `services/api`.** Habla directo con Supabase usando la publishable key,
+Auth y RLS. La API existe solo porque *escribir eventos* necesita la secret key; leer y editar
+desde el navegador no la necesita, porque RLS ya decide qué ve y qué puede hacer cada usuario.
+Un endpoint intermedio que replicara esas reglas sería una segunda implementación de la misma
+política de acceso, y dos implementaciones divergen.
+
+**Decisiones de interfaz**
+
+- **La cola de revisión es la pantalla que justifica el proyecto.** Recibe todo lo que el
+  sistema no resolvió solo, y cada corrección del guardia es además el insumo del
+  reentrenamiento. No es solo operación: es recolección de datos.
+- **Los conflictos se explican en palabras.** La tarjeta dice *"la placa sugiere una moto pero
+  la cámara vio un carro; casi siempre significa que el OCR leyó mal un carácter"*. Un guardia
+  no debería aprender el vocabulario interno del sistema para hacer su trabajo.
+- **Todo se muestra en `America/Bogota`**, nunca en la zona del navegador. Un reporte que
+  cambia de horas según el equipo desde el que se consulta es inservible.
+- **`getUser()` y no `getSession()`** en el proxy: revalida el token contra Supabase en vez de
+  confiar en lo que afirme la cookie.
+- **Una cuenta sin `profiles` muestra un mensaje explícito.** RLS la dejaría ver cero filas,
+  que es correcto pero se ve idéntico a una app vacía. Un modo de fallo silencioso y confuso
+  es peor que un error claro.
+
+**Migración de `middleware` a `proxy`.** Next 16 deprecó la convención `middleware`; se migró
+para no arrancar un proyecto nuevo sobre una API obsoleta.
+
+**RLS verificado empíricamente, no por documentación**
+
+La prueba tiene un discriminador real: `cameras` contiene 2 filas sembradas por la migración.
+
+```
+--- ANONIMO (solo publishable key) ---
+  access_events      HTTP 200  []
+  vehicles           HTTP 200  []
+  cameras            HTTP 200  []          <- existen 2 filas, ve 0
+  parking_sessions   HTTP 200  []
+
+--- AUTENTICADO como guardia ---
+  cameras            HTTP 200  filas=2     <- ahora si
+  profiles           HTTP 200  [{"full_name":"Guardia de prueba","role":"guard"}]
+  POST owners        HTTP 201                escritura permitida
+```
+
+Y la puerta de rutas:
+
+```
+/            HTTP 307  -> /login?redirect=%2F
+/revision    HTTP 307  -> /login?redirect=%2Frevision
+/login       HTTP 200
+```
+
+Esa redirección es **comodidad, no seguridad**: quien la saltara llegaría a una página que
+consulta como anónimo y no recibe nada.
+
+**Datos de demo sembrados.** Se dejaron los 6 eventos de la sesión grabada en la base para que
+el panel tenga contenido al abrirlo. Se borran con:
+
+```powershell
+python scripts\inspect_events.py --purge-demo
+```
+
+**Cómo se prueba**
+
+```powershell
+cd apps\web; npm install; npm run dev
+# entrar con guardia@unal.edu.co
+```
+
+**Pendiente:** Realtime en el tablero, exportación CSV, y restringir el histórico completo a
+`admin` — hoy las políticas dan lectura total a cualquier autenticado, más de lo que un
+guardia necesita.
