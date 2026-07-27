@@ -664,3 +664,78 @@ cd apps\web; npm install; npm run dev
 **Pendiente:** Realtime en el tablero, exportación CSV, y restringir el histórico completo a
 `admin` — hoy las políticas dan lectura total a cualquier autenticado, más de lo que un
 guardia necesita.
+
+---
+
+## 2026-07-27 — Mínimo privilegio, Realtime y exportación CSV
+
+**Qué se hizo**
+
+Las tres mejoras pendientes del panel, más la migración `0003` que las respalda.
+
+### 1. Mínimo privilegio para el rol `guard`
+
+Las políticas de la migración `0001` daban `using (true)`: **cualquier usuario autenticado
+podía leer el histórico completo de entradas y salidas de todo el mundo**. Para operar la
+portería eso es mucho más de lo necesario.
+
+Un guardia necesita exactamente tres cosas: la cola de revisión, lo que pasó durante su turno,
+y consultar un vehículo puntual por placa. Nada de eso exige ver los movimientos de un
+vehículo hace seis meses — y ese histórico es justamente donde una fuga haría más daño, porque
+permite reconstruir la rutina diaria de una persona identificable.
+
+| | guard | admin |
+|---|---|---|
+| Cola de revisión | ✅ | ✅ |
+| Últimas 24 h | ✅ | ✅ |
+| Histórico completo | ❌ | ✅ |
+| Datos personales de dueños | ❌ (puede crearlos, no listarlos) | ✅ |
+| Vehículos por placa | ✅ | ✅ |
+
+Los vehículos mantienen lectura completa: no llevan datos personales por sí mismos y el
+guardia los consulta constantemente.
+
+### 2. Realtime
+
+`alter publication supabase_realtime add table access_events` más un componente que recarga
+la página al detectar cambios, con indicador de estado de conexión.
+
+**Recarga los componentes de servidor en vez de parchear estado local.** El tablero muestra
+agregados y una vista de la base; recalcularlos en el navegador sería una segunda
+implementación de lógica que Postgres ya posee. Con unos pocos eventos por minuto, el costo de
+recargar es irrelevante frente al riesgo de que las dos implementaciones divergan.
+
+También se puso `replica identity full`: sin eso, los UPDATE llegan sin la fila anterior y el
+panel no puede decidir si la fila sigue perteneciendo a la vista actual.
+
+Realtime respeta RLS, así que un guardia solo recibe notificaciones de filas que podría leer.
+
+### 3. Exportación CSV
+
+Solo para `admin`. Dos detalles que parecen menores y no lo son:
+
+- **Separador `;` y BOM al inicio.** Excel en configuración regional española divide por
+  punto y coma, y sin el BOM muestra los acentos como mojibake. Un CSV que hay que arreglar a
+  mano antes de usarlo no sirve de nada en administración.
+- **Paginado de 1000 filas.** PostgREST corta una sola respuesta; con 4.000 eventos diarios
+  proyectados, un export sin paginar entregaría un archivo truncado **sin avisar**.
+
+**Migración de `.returns<T>()` a `.overrideTypes<T, { merge: false }>()`**, deprecado en
+`@supabase/postgrest-js` 2.110. Se verificó en los tipos del paquete instalado antes de
+cambiar, no se supuso el reemplazo.
+
+**Nota de diseño:** la interfaz oculta el botón de exportar a los guardias, pero eso es
+cortesía, no seguridad. Quien lo forzara recibiría lo que RLS le permita y nada más. Las dos
+capas deben coincidir, y cuando discrepan manda la base.
+
+**Estado:** el código está subido; **la migración `0003` está pendiente de aplicar**, porque el
+Personal Access Token fue revocado y no tiene sentido volver a pedir una llave de alcance de
+cuenta para un cambio de veinte líneas. Se ejecuta desde el SQL Editor.
+
+**Cómo se prueba, una vez aplicada**
+
+```powershell
+cd apps\web; npm run dev
+# entrar como guardia@unal.edu.co -> el historial muestra solo 24 h, sin boton de exportar
+# entrar como admin@unal.edu.co   -> historico completo y exportacion CSV
+```

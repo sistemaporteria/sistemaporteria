@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LiveRefresh } from "@/components/live-refresh";
 import { createClient } from "@/lib/supabase/server";
 import { formatDuration, formatTime } from "@/lib/format";
 import type { AccessEvent, ParkingSession } from "@/lib/types";
@@ -49,18 +50,21 @@ export default async function DashboardPage() {
       .eq("is_open", true)
       .order("entered_at", { ascending: false })
       .limit(50)
-      .returns<ParkingSession[]>(),
+      .overrideTypes<ParkingSession[], { merge: false }>(),
     supabase
       .from("access_events")
       .select("id, occurred_at, camera_id, direction, plate_read, verdict, review_status")
       .order("occurred_at", { ascending: false })
       .limit(12)
-      .returns<AccessEvent[]>(),
+      .overrideTypes<AccessEvent[], { merge: false }>(),
   ]);
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Tablero de hoy</h1>
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-xl font-semibold">Tablero de hoy</h1>
+        <LiveRefresh />
+      </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Entradas hoy" value={entries.count ?? 0} />

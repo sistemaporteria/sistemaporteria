@@ -1,3 +1,4 @@
+import { LiveRefresh } from "@/components/live-refresh";
 import { ReviewQueue } from "@/components/review-queue";
 import { createClient } from "@/lib/supabase/server";
 import type { AccessEvent } from "@/lib/types";
@@ -17,12 +18,15 @@ export default async function RevisionPage() {
     .eq("review_status", "pending")
     .order("occurred_at", { ascending: false })
     .limit(100)
-    .returns<AccessEvent[]>();
+    .overrideTypes<AccessEvent[], { merge: false }>();
 
   return (
     <section className="space-y-4">
       <header>
-        <h1 className="text-xl font-semibold">Cola de revisión</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-semibold">Cola de revisión</h1>
+          <LiveRefresh />
+        </div>
         <p className="mt-1 text-sm text-slate-500">
           Lecturas que el sistema no pudo resolver solo: placas desconocidas, conflictos entre
           la placa y lo que vio la cámara, o pasos ilegibles. Confirmar o corregir aquí es lo

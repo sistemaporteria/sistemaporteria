@@ -17,7 +17,7 @@ export default async function VehiculosPage() {
     )
     .order("plate")
     .limit(200)
-    .returns<VehicleWithOwner[]>();
+    .overrideTypes<VehicleWithOwner[], { merge: false }>();
 
   return (
     <div className="space-y-6">

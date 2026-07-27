@@ -1,3 +1,5 @@
+import { ExportCsv } from "@/components/export-csv";
+import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { VERDICT_LABEL, type AccessEvent, type ParkingSession } from "@/lib/types";
@@ -6,9 +8,12 @@ export const dynamic = "force-dynamic";
 
 type SearchParams = Promise<{ placa?: string; direccion?: string }>;
 
-export default async function HistorialPage({ searchParams }: { searchParams: SearchParams }) {
+export default async function HistorialPage({
+  searchParams,
+}: Readonly<{ searchParams: SearchParams }>) {
   const { placa, direccion } = await searchParams;
-  const supabase = await createClient();
+  const [supabase, profile] = await Promise.all([createClient(), getProfile()]);
+  const isAdmin = profile?.role === "admin";
 
   let eventsQuery = supabase
     .from("access_events")
@@ -25,19 +30,28 @@ export default async function HistorialPage({ searchParams }: { searchParams: Se
   }
 
   const [{ data: events, error }, { data: sessions }] = await Promise.all([
-    eventsQuery.returns<AccessEvent[]>(),
+    eventsQuery.overrideTypes<AccessEvent[], { merge: false }>(),
     supabase
       .from("parking_sessions")
       .select("entry_event_id, plate, entered_at, exited_at, duration, is_open")
       .order("entered_at", { ascending: false })
       .limit(50)
-      .returns<ParkingSession[]>(),
+      .overrideTypes<ParkingSession[], { merge: false }>(),
   ]);
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold">Historial</h1>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Historial</h1>
+          {!isAdmin && (
+            <p className="mt-1 text-sm text-slate-500">
+              Como guardia ves las últimas 24 horas y lo que esté pendiente de revisión. El
+              histórico completo es material administrativo.
+            </p>
+          )}
+        </div>
+        {isAdmin && <ExportCsv plate={placa} direction={direccion} />}
       </header>
 
       <form className="flex flex-wrap items-end gap-3" method="get">

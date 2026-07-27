@@ -64,10 +64,37 @@ autenticado como guardia, devuelve las 2 que existen.
 **`getUser()` y no `getSession()`** en el proxy: revalida el token contra Supabase en vez de
 confiar en lo que afirme la cookie.
 
+## Qué ve cada rol
+
+Definido por RLS en la migración `0003`, no por la interfaz. Ocultar un botón que la base
+rechazaría de todos modos es cortesía, no seguridad: cuando las dos discrepan, manda la base.
+
+| | guard | admin |
+|---|---|---|
+| Cola de revisión | ✅ | ✅ |
+| Eventos de las últimas 24 h | ✅ | ✅ |
+| Histórico completo | ❌ | ✅ |
+| Datos personales de dueños | ❌ (solo puede crearlos) | ✅ |
+| Vehículos por placa | ✅ | ✅ |
+| Exportar CSV | ❌ | ✅ |
+
+Un guardia necesita resolver lecturas dudosas, saber quién está adentro y consultar un
+vehículo puntual. Nada de eso exige ver los movimientos de una persona hace seis meses — y ese
+histórico es justamente donde una fuga haría más daño, porque permite reconstruir la rutina
+diaria de alguien identificable.
+
+## Realtime
+
+El tablero y la cola de revisión se actualizan solos cuando cambia `access_events`, con un
+indicador de estado de la conexión. Se hace recargando los componentes de servidor y no
+parcheando estado local: la vista muestra agregados y una vista de la base, y recalcularlos en
+el navegador sería una segunda implementación de lógica que Postgres ya posee. Con unos pocos
+eventos por minuto, el costo de recargar es irrelevante.
+
+Realtime respeta RLS, así que un guardia solo recibe notificaciones de filas que sus políticas
+le permitirían leer.
+
 ## Pendiente
 
-- Realtime: el tablero se actualiza al recargar, no solo. Supabase lo soporta y la tabla ya
-  está preparada.
-- Reportes exportables a CSV para administración.
-- Restringir el histórico completo a `admin`: hoy las políticas dan lectura total a cualquier
-  usuario autenticado, que es más de lo que un guardia necesita.
+- Fotografía del recorte de placa en la cola de revisión: el agente todavía no sube imágenes.
+- Filtro por rango de fechas en el histórico.
