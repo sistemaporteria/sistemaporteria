@@ -257,3 +257,74 @@ servicio del lado del servidor.
 **Estado: bloqueado.** La anon key entregada devuelve **HTTP 401** contra
 `/rest/v1/`. Lo más probable es que las *legacy JWT keys* estén deshabilitadas y el proyecto
 use las nuevas `sb_publishable_...`. El esquema no se ha aplicado.
+
+---
+
+## 2026-07-25 — Video con placas legibles, y un falso positivo del dominio encontrado con él
+
+**Qué se hizo**
+
+1. `datasets/scripts/download_alpr_videos.py` — descarga tres videos de
+   [BarthPaleologue/ALPR](https://github.com/BarthPaleologue/ALPR) (MIT) que **sí tienen
+   placas legibles**: un plano cercano con la placa `29-UM-92` nítida, y dashcam en París bajo
+   lluvia con varios vehículos y motos.
+2. `scripts/probe_video_alpr.py` — corre el pipeline completo (detector YOLOv9 + OCR) sobre un
+   video y reporta cobertura, **ancho de placa en píxeles** y las lecturas obtenidas. El ancho
+   es el número que decide si un video sirve, porque el acantilado del OCR está en 60 px.
+3. Corrección en `plate_rules`: patrones `strict`.
+
+**Verificación sobre video real** (`alpr_video1.mp4`, 60 frames):
+
+```
+con placa     : 35 (58%)
+ancho de placa: min 28 / mediana 82 / max 200 px
+lecturas      : 29UM92, 5527MA, 22ZC39, 20OH47 ...
+```
+
+Detección y OCR **funcionan sobre material real**, no solo sintético. La mediana de 82 px
+cae en el rango que la medición sintética había declarado suficiente.
+
+**El bug que esto destapó**
+
+Entre las lecturas portuguesas, dos fueron aceptadas como **placas colombianas válidas**:
+
+```
+0961RF  -> coercion 1->I  -> 096IRF  aceptada como motocarro
+66TE67  -> coercion T->7, E->3 -> 667367  aceptada como placa de policía
+```
+
+Ambas inventadas. La causa: el riesgo de falso positivo de un patrón crece con **cuántas
+cadenas pueden ser dobladas hacia él**. `NNNNNN` es el peor caso posible — casi toda letra
+tiene un dígito parecido, así que cualquier lectura de seis caracteres colapsa en él.
+`NNNLLL` sufre lo mismo en su tramo numérico.
+
+**Corrección:** se añadió `strict: bool` a `PlatePattern`. Un patrón estricto se reconoce
+solo si el texto **ya lo cumple exactamente**; nunca se dobla nada hacia él. Se marcaron así
+`NNNNNN` (policía) y `NNNLLL` (motocarro). Resultado:
+
+| Lectura | Antes | Ahora |
+|---|---|---|
+| `0961RF`, `66TE67`, `29UM92`, `5527MA`, `22ZC39` | 2 aceptadas ❌ | **todas rechazadas** ✅ |
+| `123ABC`, `123456` (colombianas legítimas) | aceptadas | **siguen aceptadas** ✅ |
+| `A8C1Z3` → `ABC123` (2 errores de OCR) | corregida | **sigue corrigiendo** ✅ |
+
+Los barridos del OCR sintético dieron **idénticos** tras el cambio: la restricción solo afecta
+a placas extranjeras. Cubierto por 8 tests de regresión nuevos.
+
+**Por qué importa más de lo que parece:** en la portería no habrá placas portuguesas, pero sí
+habrá lecturas corruptas por movimiento, suciedad y ángulo, que producen exactamente el mismo
+efecto — cadenas basura dobladas hasta parecer placas válidas. Un vehículo fantasma en la base
+de datos es peor que una lectura fallida, porque nadie lo detecta. Es el mismo principio detrás
+de `MAX_CORRECTIONS`, aplicado ahora a nivel de patrón.
+
+**Lección de método:** el bug era invisible con datos sintéticos, porque el generador solo
+produce placas colombianas válidas. Apareció al primer contacto con datos reales de otra
+distribución. Los datos sintéticos miden sensibilidad; **no encuentran errores de dominio**.
+
+**Cómo se prueba**
+
+```powershell
+.\.venv\Scripts\python.exe datasets\scripts\download_alpr_videos.py
+.\.venv\Scripts\python.exe scripts\probe_video_alpr.py datasets\raw\video\alpr_video1.mp4 --every 8
+.\.venv\Scripts\python.exe -m pytest packages -q      # 91 tests
+```

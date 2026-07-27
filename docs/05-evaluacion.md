@@ -12,26 +12,65 @@ mediciones ya realizadas.
 
 ---
 
-## 1. El problema: no hay video de portería
+## 1. Video disponible y para qué sirve cada uno
 
-Se descargaron los dos únicos videos de tráfico libres, versionados y sin necesidad de
-cuenta ([supervision assets](https://supervision.roboflow.com/latest/assets/)):
+### Primer intento: video de tráfico genérico — no sirve para placas
 
 ```powershell
 python datasets/scripts/download_video_assets.py
-# -> datasets/raw/video/vehicles.mp4    3840x2160, 25 fps, 22 s
-# -> datasets/raw/video/vehicles-2.mp4  1920x1080, 30 fps, 43 s
+# -> vehicles.mp4    3840x2160, 25 fps, 22 s
+# -> vehicles-2.mp4  1920x1080, 30 fps, 43 s
 ```
 
 **Hallazgo empírico:** ambos son tomas desde un puente sobre autopista. Los vehículos se ven
 bien —sirven para el modelo 1— pero **las placas miden ~10 px de ancho**: inservibles para
 los modelos 2 y 3.
 
-Esto no es mala suerte, es la norma: el video de tráfico público está grabado para contar
-vehículos, no para leer placas. Y confirma de entrada el requisito óptico: sin una cámara
-apuntada al punto correcto, no hay ALPR posible por bueno que sea el modelo.
+No es mala suerte, es la norma: el video de tráfico público se graba para *contar* vehículos,
+no para *leer* placas.
 
-De ahí la estrategia de tres niveles.
+### Segundo intento: video con placas legibles — sí sirve
+
+Los repositorios de proyectos ALPR sí commitean material con placas legibles, porque lo
+necesitan para sus propias demos. De [BarthPaleologue/ALPR](https://github.com/BarthPaleologue/ALPR)
+(licencia MIT):
+
+```powershell
+python datasets/scripts/download_alpr_videos.py
+```
+
+| Archivo | Resolución | Duración | Contenido |
+|---|---|---|---|
+| `alpr_video1.mp4` | 1920×1080 | 27 s | Toyota en Funchal, placa `29-UM-92` nítida, plano cercano |
+| `alpr_test.mp4` | 1280×720 | 40 s | Dashcam en París **bajo lluvia**, varios vehículos y **motos** |
+| `alpr_video.mp4` | 1280×720 | 10 s | clip corto |
+
+**Verificado ejecutando el pipeline completo** (`scripts/probe_video_alpr.py`) sobre
+`alpr_video1.mp4`, 60 frames analizados:
+
+```
+con placa     : 35 (58%)
+ancho de placa: min 28 / mediana 82 / max 200 px
+bajo 60 px    : 3/42 (7%)
+lecturas      : 29UM92, 5527MA, 22ZC39, 20OH47 ...
+```
+
+La mediana de 82 px cae justo en el rango que la medición sintética declaró suficiente, y el
+detector encontró placa en el 58% de los frames. **Detección y OCR funcionan sobre video real.**
+
+**Limitación importante:** son placas **portuguesas y francesas**, no colombianas. Sirven para
+los modelos 1 y 2 (detección) y para la exactitud de caracteres del modelo 3, pero **no
+pueden validar la capa de dominio colombiana**. Para eso siguen haciendo falta las placas
+sintéticas y, en última instancia, video real de la portería.
+
+### Otras fuentes evaluadas
+
+| Fuente | Veredicto |
+|---|---|
+| **Pixabay / Pexels** | Miles de clips libres de "parking gate" y "license plate", sin atribución requerida. **Requieren descarga manual** desde el navegador (bloquean el scraping automático). Es la mejor vía para conseguir un clip que se parezca a la portería. |
+| **UA-DETRAC** | Video de cámara fija con clima anotado, ideal para el modelo 1. Placas demasiado pequeñas. |
+| **RodoSol-ALPR / UFPR-ALPR** | Imágenes, no video. El escenario más parecido a la portería. Trámite por correo institucional. |
+| **YouTube vía yt-dlp** | Técnicamente posible, pero descargar contravendría los términos de servicio aun con licencia CC en el video. No se usa. |
 
 ---
 

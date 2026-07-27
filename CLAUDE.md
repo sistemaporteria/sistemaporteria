@@ -181,25 +181,28 @@ Actualizado: 2026-07-25
 | Componente | Estado |
 |---|---|
 | Estructura del repo, git, docs base | ✅ hecho |
-| `packages/plate_rules` (dominio de placas) | ✅ 62 tests |
+| `packages/plate_rules` (dominio de placas) | ✅ 70 tests |
 | `packages/plate_synth` (placas sintéticas) | ✅ 21 tests |
 | `scripts/eval_ocr.py` + medición del OCR | ✅ **medido**, ver [docs/05-evaluacion.md](docs/05-evaluacion.md) |
+| `scripts/probe_video_alpr.py` (pipeline sobre video) | ✅ verificado sobre video real |
+| Video de prueba: vehículos + **placas legibles** | ✅ descargado |
 | `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ escrito, ⚠️ sin verificar en ejecución |
-| Video de prueba (detector de vehículos) | ✅ descargado |
 | Esquema de BD (SQL con RLS) | ✅ escrito, ⬜ sin aplicar en Supabase |
 | `services/edge_agent` | ⬜ pendiente |
 | `services/api` | ⬜ pendiente |
 | `apps/web` | ⬜ pendiente |
-| Detector de placas (modelo 2) — evaluación | ⬜ pendiente |
+| Detector de placas (modelo 2) — métrica IoU | ⬜ pendiente |
 | Calibración con datos reales | ⬜ bloqueado: requiere video de la portería |
 
-**Bloqueos activos:**
+**Supabase.** La clave que funciona es la **publishable** (`sb_publishable_...`) en
+`.env.local`; las *legacy JWT keys* del proyecto están deshabilitadas y dan 401. Nota: la
+raíz `/rest/v1/` devuelve 401 incluso con clave válida — para comprobar conectividad hay que
+consultar una tabla (`/rest/v1/<tabla>?select=*`), que responde `PGRST205` si no existe.
 
-1. **Supabase**: la anon key entregada devuelve **401**. Probablemente las *legacy JWT keys*
-   están deshabilitadas y hay que usar las nuevas (`sb_publishable_...`), o habilitarlas en
-   Settings → API Keys. El esquema `services/api/migrations/0001_initial_schema.sql` debe
-   ejecutarse desde el SQL Editor (ninguna clave anon puede ejecutar DDL).
-2. **Sin video real de la portería** → todo lo marcado `CALIBRAR` sigue sin medir.
+Pendiente: ejecutar `services/api/migrations/0001_initial_schema.sql` en el SQL Editor
+(ninguna clave de cliente puede ejecutar DDL).
+
+**Bloqueo activo:** sin video real de la portería, todo lo marcado `CALIBRAR` sigue sin medir.
 
 **Siguiente paso:** `services/edge_agent` — suscriptor MQTT que aplica `plate_rules` y
 persiste en el outbox SQLite local.

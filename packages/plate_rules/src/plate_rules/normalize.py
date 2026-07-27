@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from .patterns import DIGIT, LETTER, candidate_masks, find_pattern
+from .patterns import DIGIT, LETTER, candidate_masks, find_pattern, strict_masks
 from .types import NormalizedPlate
 
 # Upper bound on how many characters may be coerced. Beyond this the reading is too
@@ -92,21 +92,22 @@ def coerce_to_mask(text: str, mask: str) -> tuple[str, int] | None:
   return "".join(out), corrections
 
 
-def normalize(raw: str, max_corrections: int = MAX_CORRECTIONS) -> NormalizedPlate:
-  """Clean an OCR reading and coerce it onto the closest valid Colombian plate pattern.
+def _exact_strict_match(text: str) -> str | None:
+  """Mask of the strict pattern the text already satisfies, if any.
 
-  Every catalog mask of the same length is attempted; the one needing the fewest coercions
-  and yielding a catalog-valid plate wins.
+  Strict patterns accept only exact matches; nothing is ever coerced into them.
   """
-  text = clean(raw)
+  if find_pattern(text) is None:
+    return None
+  for mask in strict_masks(len(text)):
+    result = coerce_to_mask(text, mask)
+    if result is not None and result[1] == 0:
+      return mask
+  return None
 
-  if not text:
-    return NormalizedPlate(raw, "", None, 0, False, "empty_after_cleanup")
 
-  masks = candidate_masks(len(text))
-  if not masks:
-    return NormalizedPlate(raw, text, None, 0, False, f"unsupported_length_{len(text)}")
-
+def _best_coercion(text: str, masks: tuple[str, ...]) -> tuple[str, str, int] | None:
+  """Coercion needing the fewest changes that still lands on a catalog pattern."""
   best: tuple[str, str, int] | None = None
   for mask in masks:
     result = coerce_to_mask(text, mask)
@@ -119,7 +120,29 @@ def normalize(raw: str, max_corrections: int = MAX_CORRECTIONS) -> NormalizedPla
       best = (coerced, mask, corrections)
     if corrections == 0:
       break
+  return best
 
+
+def normalize(raw: str, max_corrections: int = MAX_CORRECTIONS) -> NormalizedPlate:
+  """Clean an OCR reading and coerce it onto the closest valid Colombian plate pattern.
+
+  Every catalog mask of the same length is attempted; the one needing the fewest coercions
+  and yielding a catalog-valid plate wins.
+  """
+  text = clean(raw)
+
+  if not text:
+    return NormalizedPlate(raw, "", None, 0, False, "empty_after_cleanup")
+
+  strict_mask = _exact_strict_match(text)
+  if strict_mask is not None:
+    return NormalizedPlate(raw, text, strict_mask, 0, True)
+
+  masks = candidate_masks(len(text))
+  if not masks:
+    return NormalizedPlate(raw, text, None, 0, False, f"unsupported_length_{len(text)}")
+
+  best = _best_coercion(text, masks)
   if best is None:
     return NormalizedPlate(raw, text, None, 0, False, "no_matching_pattern")
 

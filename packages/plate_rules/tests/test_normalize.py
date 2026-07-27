@@ -95,6 +95,32 @@ class TestNormalize:
     result = normalize("a8c-1z3")
     assert result.raw == "a8c-1z3"
 
+  @pytest.mark.parametrize(
+    "foreign",
+    [
+      "0961RF",  # was coerced into 096IRF and accepted as a motocarro
+      "66TE67",  # was coerced into 667367 and accepted as a police plate
+      "29UM92",
+      "5527MA",
+      "22ZC39",
+    ],
+  )
+  def test_rejects_foreign_plates_seen_on_real_footage(self, foreign):
+    # Regression: measured on Portuguese footage, these were bent into valid Colombian
+    # plates by the coercion. Digit-leading masks are too permissive to coerce into.
+    assert not normalize(foreign).is_valid
+
+  @pytest.mark.parametrize("plate", ["123ABC", "123456"])
+  def test_strict_patterns_still_accept_exact_matches(self, plate):
+    result = normalize(plate)
+    assert result.is_valid
+    assert result.text == plate
+    assert result.corrections == 0
+
+  def test_strict_patterns_never_accept_coercion(self):
+    # 12BABC would need B->8 to become the motocarro 128ABC; strict forbids it.
+    assert not normalize("12BABC").is_valid
+
   def test_prefers_fewest_corrections_across_masks(self):
     # 6 chars match LLLNNN, NNNLLL, LNNNNN and NNNNNN; the zero-correction one must win.
     result = normalize("123ABC")
