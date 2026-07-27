@@ -739,3 +739,104 @@ cd apps\web; npm run dev
 # entrar como guardia@unal.edu.co -> el historial muestra solo 24 h, sin boton de exportar
 # entrar como admin@unal.edu.co   -> historico completo y exportacion CSV
 ```
+
+---
+
+## 2026-07-27 — `FOR ALL` era una política de lectura escondida (migración `0004`)
+
+**Qué se hizo**
+
+Cerrar una fuga que la migración `0003` creyó haber cerrado y no cerró, y sustituir la lectura
+que el panel necesitaba por una función que entrega solo un identificador.
+
+**El fallo**
+
+La `0003` eliminó `owners_read` dando por hecho que con eso los datos personales quedaban
+reservados a administración. No cambió nada: la política `owners_write` de la `0001` estaba
+declarada `for all`, y en PostgreSQL **`FOR ALL` incluye `SELECT`**. Mientras exista una
+política permisiva `for all`, quitar la de lectura no quita la lectura.
+
+```sql
+-- 0001, aparentemente una política de escritura
+create policy owners_write on owners for all to authenticated
+  using (current_role_is('guard') or current_role_is('admin'));
+```
+
+Ese `for all` concede `SELECT`, `INSERT`, `UPDATE` y `DELETE`. Los guardias siguieron leyendo
+nombres, documentos y teléfonos durante toda la vida de la `0003`.
+
+**Cómo se detectó, y por qué no se detectó antes**
+
+`pg_policies` mostraba las políticas correctas de la `0003` y ninguna que dijera «lectura para
+guardias». Lo destapó `scripts/verify_rls.py`, que no lee el catálogo: entra como cada rol y
+compara lo que **realmente** recibe. Cinco comprobaciones pasaban y una fallaba siempre igual:
+
+```
+FALLA guard NO lista owners: 1        <- deberia ser 0
+```
+
+El catálogo describe la intención; solo la consulta ejecutada describe el efecto. Es el mismo
+patrón que la fuga de `parking_sessions` (ADR 0003): en RLS, leer la definición no sustituye a
+probarla.
+
+**La corrección**
+
+Las políticas se declaran ahora por operación, nunca `for all`:
+
+| política | operación | quién |
+|---|---|---|
+| `owners_read_admin` | SELECT | admin |
+| `owners_insert_guard` | INSERT | guard, admin |
+| `owners_update_admin` | UPDATE | admin |
+| `owners_delete_admin` | DELETE | admin |
+
+**El problema que aparece al quitar la lectura.** Al registrar un vehículo, el panel busca si
+el documento ya existe para reutilizar la persona en vez de duplicarla. Sin `SELECT`, un
+guardia crearía un dueño nuevo en cada registro y la base acumularía la misma persona repetida.
+
+La salida no es devolverle la lectura, sino darle exactamente el dato que necesita:
+
+```sql
+create or replace function find_owner_id_by_document(document text)
+returns uuid language sql stable security definer set search_path = public
+as $$ select id from owners where document_id = document and active limit 1; $$;
+```
+
+`SECURITY DEFINER` ejecuta la función con los privilegios de su dueño, así que consulta la
+tabla aunque quien la llama no pueda. Devuelve un `uuid` y nada más — nunca el nombre, el
+documento ni el teléfono. `set search_path = public` es obligatorio en funciones
+`SECURITY DEFINER`: sin él, quien la invoca puede anteponer un esquema propio y hacer que
+`owners` resuelva a una tabla suya.
+
+**Revisión de las demás tablas.** `vehicles_write` y `cameras_admin_write` también son
+`for all`, pero ahí la lectura amplia es intencional: el guardia consulta vehículos por placa
+constantemente y las cámaras no contienen datos personales. Se dejan como están, ahora de
+forma consciente.
+
+**Verificación — las 6 comprobaciones en verde**
+
+```
+=== conteos por rol ===
+  admin ve 6 eventos, guard ve 5
+  OK   guard ve MENOS eventos que admin: 5  (admin=6)
+=== dueños: datos personales solo para admin ===
+  OK   admin lista owners: 1
+  OK   guard NO lista owners: 0  (RLS devuelve vacio)
+=== histórico antiguo y ya resuelto ===
+  OK   admin ve el resuelto: 1
+  OK   guard NO ve el resuelto de mas de 24 h: 0
+=== cola de revisión: ambos la ven ===
+  OK   guard ve pendientes: 5
+=== guardia puede crear dueños (su tarea en la cola) ===
+  OK   guard inserta owner: 201
+todo correcto
+```
+
+**Cómo se prueba**
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_rls.py
+```
+
+**Regla que queda:** en RLS, `for all` no es un atajo cómodo, es una política de lectura
+escondida. Las políticas se declaran por operación.

@@ -183,7 +183,7 @@ vehiculos_porteria/
 
 ## 7. Estado actual
 
-Actualizado: 2026-07-25
+Actualizado: 2026-07-27
 
 | Componente | Estado |
 |---|---|
@@ -194,10 +194,11 @@ Actualizado: 2026-07-25
 | `scripts/probe_video_alpr.py` (pipeline sobre video) | ✅ verificado sobre video real |
 | Video de prueba: vehículos + **placas legibles** | ✅ descargado |
 | `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ escrito, ⚠️ sin verificar en ejecución |
-| Esquema de BD en Supabase | ✅ **aplicado y verificado** (migraciones 0001 + 0002) |
+| Esquema de BD en Supabase | ✅ **aplicado y verificado** (migraciones 0001–0004) |
+| Mínimo privilegio por rol (RLS) | ✅ **6/6 comprobaciones** con `scripts/verify_rls.py` |
 | `services/edge_agent` | ✅ 60 tests, verificado con sesión grabada |
 | `services/api` | ✅ 23 tests, circuito verificado contra la base real |
-| `apps/web` | ✅ 5 rutas, RLS verificado desde el navegador |
+| `apps/web` | ✅ 5 rutas, Realtime, exportación CSV, RLS verificado desde el navegador |
 | Detector de placas (modelo 2) — métrica IoU | ⬜ pendiente |
 | Calibración con datos reales | ⬜ bloqueado: requiere video de la portería |
 
@@ -215,7 +216,8 @@ las cinco tablas, lectura y escritura anónimas bloqueadas, deduplicado y vista 
 
 **Bloqueo activo:** sin video real de la portería, todo lo marcado `CALIBRAR` sigue sin medir.
 
-**Siguiente paso:** calibración con video real de la portería (bloqueado), Realtime en el tablero, y exportación CSV para administración.
+**Siguiente paso:** calibración con video real de la portería (bloqueado). La demo está
+completa de extremo a extremo; ver [docs/06-ejecucion.md](docs/06-ejecucion.md) para correrla.
 
 ---
 

@@ -44,15 +44,15 @@ export function RegisterVehicle() {
     const supabase = createClient();
 
     // The owner may already exist; reuse the record instead of creating a duplicate person.
+    // Guards cannot read `owners` at all, so this goes through a SECURITY DEFINER function
+    // that returns only an id — never the name, document or phone.
     let ownerId: string | null = null;
     if (form.ownerName.trim()) {
       if (form.documentId.trim()) {
-        const { data: existing } = await supabase
-          .from("owners")
-          .select("id")
-          .eq("document_id", form.documentId.trim())
-          .maybeSingle();
-        ownerId = existing?.id ?? null;
+        const { data: existing } = await supabase.rpc("find_owner_id_by_document", {
+          document: form.documentId.trim(),
+        });
+        ownerId = (existing as string | null) ?? null;
       }
 
       if (!ownerId) {
