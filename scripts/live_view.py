@@ -9,7 +9,8 @@ Usage:
   python scripts/live_view.py datasets/raw/video/alpr_video1.mp4
   python scripts/live_view.py rtsp://localhost:8554/entrada --detector-label car
 
-Keys: q or ESC to quit, space to pause, s to save the current frame.
+Keys: q or ESC to quit, space to pause, s to save the current frame. The title bar's X
+closes it too.
 """
 
 from __future__ import annotations
@@ -199,6 +200,10 @@ def main() -> int:
 
     key = cv2.waitKey(1) & 0xFF
     if key in (ord("q"), 27):
+      break
+    # The title bar's X is not a key event: HighGUI destroys the window but the loop would
+    # keep running and imshow would just recreate it. Ask the window whether it still exists.
+    if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
       break
     if key == ord(" "):
       paused = not paused
