@@ -125,9 +125,20 @@ $env:PYTHONPATH="packages\plate_rules\src;services\edge_agent\src"
 .\.venv\Scripts\python.exe -m edge_agent
 ```
 
-> ⚠️ Este camino **no está verificado en ejecución**. El stack de Frigate está escrito y
-> configurado, pero nunca se ha corrido con Docker levantado. Los parámetros marcados
-> `CALIBRAR` (`min_area`, zonas, `fps`) son puntos de partida razonados, no mediciones.
+> ✅ Camino **verificado en ejecución**: Frigate detecta, el LPR lee la placa y el evento
+> llega hasta Supabase. Corregir cuatro defectos costó — ver la última sección del
+> [CHANGELOG](CHANGELOG-IMPLEMENTACION.md).
+>
+> Dos cosas que conviene saber antes de mirar la salida:
+>
+> - El video de prueba **no es colombiano**. Las placas que lee (`CD864MY`, `DC·458-BC`) no
+>   encajan en `LLLNNN`, así que el dominio las marca `unrecognized_pattern` y las manda a
+>   revisión. Es la conducta correcta.
+> - El LPR de Frigate **solo corre sobre `car` y `motorcycle`**. Los objetos etiquetados
+>   `bus` nunca pasan por el OCR.
+>
+> Los parámetros marcados `CALIBRAR` (`min_area`, zonas, `fps`) siguen siendo puntos de
+> partida razonados, no mediciones: eso requiere video de la portería.
 
 ---
 
@@ -139,6 +150,11 @@ $env:PYTHONPATH="packages\plate_rules\src;services\edge_agent\src"
 
 # Correr el detector + OCR sobre un video y reportar ancho de placa en pixeles
 .\.venv\Scripts\python.exe scripts\probe_video_alpr.py datasets\raw\video\alpr_video1.mp4 --every 8
+
+# Ventana en vivo: lectura cruda del modelo vs veredicto del dominio, lado a lado
+#   q/ESC salir, espacio pausar, s guardar el frame
+.\.venv\Scripts\python.exe scripts\live_view.py datasets\raw\video\alpr_video1.mp4 --detector-label car
+.\.venv\Scripts\python.exe scripts\live_view.py rtsp://localhost:8554/entrada --detector-label car
 
 # Ver que hay en la base
 .\.venv\Scripts\python.exe scripts\inspect_events.py

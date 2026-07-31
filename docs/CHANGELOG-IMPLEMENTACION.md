@@ -840,3 +840,112 @@ todo correcto
 
 **Regla que queda:** en RLS, `for all` no es un atajo cómodo, es una política de lectura
 escondida. Las políticas se declaran por operación.
+
+---
+
+## Frigate en ejecución: el stack del borde, verificado por primera vez
+
+Hasta ahora `infra/edge` estaba **escrito pero nunca ejecutado**, y `docs/06-ejecucion.md` lo
+advertía. Al levantarlo con Docker aparecieron cuatro defectos que ninguna revisión de código
+habría encontrado: todos se manifiestan solo en tiempo de ejecución.
+
+### 1. La imagen del simulador RTSP no traía ffmpeg
+
+`bluenviron/mediamtx:latest` no incluye el binario. Los dos `runOnInit` morían en silencio:
+
+```
+[path entrada] runOnInit command exited: exec: "ffmpeg": executable file not found in $PATH
+```
+
+Ningún stream llegaba a existir, y Frigate reportaba `404 Not Found` en el `DESCRIBE`. Se
+cambió a `bluenviron/mediamtx:1.19.3-ffmpeg`, con **versión fija** en vez de `latest`.
+
+### 2. `detect.enabled` es `false` por defecto — el bloqueante de fondo
+
+El síntoma era mudo: las cámaras conectaban, transmitían y grababan, pero **jamás se emitía
+un evento**. El bloque `detect:` declaraba `width`, `height` y `fps`, lo que da la impresión
+de que la detección está activa; pero Frigate no la enciende sin `enabled: true` explícito.
+
+```
+frigate/porteria_entrada/detect/state OFF
+```
+
+Se comprueba contra el config resuelto, no contra el YAML escrito:
+
+```powershell
+curl -s http://localhost:5000/api/config   # cameras.<nombre>.detect.enabled
+```
+
+### 3. `truck` no es una etiqueta emitible
+
+El labelmap por defecto de Frigate **pliega la clase COCO 7 (`truck`) a `car` a propósito**
+(`/labelmap.txt`, línea `7  car`). Pedir `truck` en `objects.track` solo produce un warning:
+los camiones ya llegan como `car`. Se eliminó de la lista.
+
+### 4. Recodificar video que ya era H.264 — 1013% de CPU
+
+El simulador recodificaba con `libx264 -preset ultrafast` dos archivos **que ya venían en
+H.264**. Medido con `docker stats`:
+
+| | antes (`libx264`) | después (`-c:v copy`) |
+|---|---|---|
+| `porteria-rtsp-sim` | 420% | **46%** |
+| `porteria-frigate` | 593% | **144%** |
+
+El equipo estaba ahogado y ffmpeg acumulaba retraso (`speed=0.44x`, lag creciente). Con
+passthrough el costo desaparece y, además, **se conservan los píxeles originales** — que
+importa porque el OCR se cae por debajo de 60 px de ancho de placa (docs/05-evaluacion.md).
+Por lo mismo se subió `detect.width/height` de la entrada a 1920x1080, su resolución nativa,
+en vez de reducirla a 720p.
+
+### El circuito completo, verificado
+
+Con los cuatro arreglos, Frigate detecta, el LPR lee y el evento llega hasta Supabase:
+
+```
+Detected text: CD864MY    (confianza 0.97, area 12584 px)
+Detected text: DC·458-BC  (confianza 0.89, area 12932 px)
+```
+
+```
+edge_agent: porteria_salida out placa=- conf=0.50 veredicto=unrecognized_pattern revision=True
+edge_agent: sincronizados 1, fallidos 0
+```
+
+```
+2026-07-31T05:46:35  porteria_salida  out  placa=-  crudo=DC·458-BC  unrecognized_pattern
+2026-07-31T05:48:16  porteria_salida  out  placa=-  crudo=CD864MY    unrecognized_pattern
+```
+
+**El veredicto `unrecognized_pattern` es correcto, no un fallo.** El video de prueba no es
+colombiano: `CD864MY` y `DC·458-BC` no encajan en `LLLNNN`. El dominio los rechaza y los manda
+a revisión, **pero conserva el texto crudo** — la decisión 7 de CLAUDE.md funcionando en vivo.
+La dirección `out` se dedujo de la cámara, como manda la decisión 3.
+
+### Dos hallazgos sobre el LPR de Frigate
+
+- **Solo corre sobre `car` y `motorcycle`.** Un vehículo etiquetado `bus` nunca pasa por el
+  OCR (`mixin.py`, "don't run for non car/motorcycle"). En este video varios carros se
+  detectan como `bus`, así que se pierden lecturas. En la portería real hay que verificar qué
+  proporción de vehículos cae en esa etiqueta antes de darlo por bueno.
+- **`sub_label` solo se llena con placas de `known_plates`**, que este proyecto no usa a
+  propósito (el registro vive en Postgres). El campo bueno es `recognized_license_plate`, que
+  Frigate siempre publica, y que es justamente el que `edge_agent` ya leía.
+
+### Ver la detección en vivo
+
+`scripts/live_view.py` abre una ventana con el video, la caja del detector y el texto del OCR,
+más un panel que muestra **en paralelo** la lectura cruda del modelo y el veredicto del
+dominio. La distancia entre ambos es el punto: una lectura de alta confianza puede terminar
+rechazada por no ser una placa colombiana.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\live_view.py datasets\raw\video\alpr_video1.mp4 --detector-label car
+.\.venv\Scripts\python.exe scripts\live_view.py rtsp://localhost:8554/entrada --detector-label car
+```
+
+La confianza del OCR llega **por carácter**, no como escalar; se colapsa con `min()`, que es
+la lectura conservadora e ignora los tokens de relleno que puntúan ~1.0.
+
+**Sigue pendiente:** todo lo marcado `CALIBRAR` (`min_area`, zonas, `fps`) sigue sin medir.
+Requiere video real de la portería.

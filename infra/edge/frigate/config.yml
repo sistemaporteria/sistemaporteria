@@ -22,10 +22,11 @@ detectors:
 # Only vehicles matter here. Narrowing the object list cuts false positives and CPU.
 objects:
   track:
+    # No `truck`: Frigate's default labelmap deliberately folds COCO class 7 (truck) into
+    # `car`, so the label is never emitted and asking for it only logs a warning.
     - car
     - motorcycle
     - bus
-    - truck
   filters:
     car:
       min_score: 0.55
@@ -47,11 +48,15 @@ lpr:
   # known_plates is intentionally NOT used. The vehicle registry lives in Postgres;
   # duplicating it in YAML would guarantee drift.
 
+# Calibration aid: says out loud why a plate was skipped (wrong label, area below min_area,
+# OCR below threshold). Set back to info once min_area is calibrated on real gate footage.
+logger:
+  default: info
+  logs:
+    frigate.data_processing.common.license_plate.mixin: debug
+
 record:
   enabled: true
-  retain:
-    days: 7
-    mode: motion
   alerts:
     retain:
       days: 30
@@ -59,6 +64,10 @@ record:
     retain:
       days: 30
 
+  continuous:
+    days: 0
+  motion:
+    days: 7
 snapshots:
   enabled: true
   timestamp: false
@@ -77,8 +86,13 @@ cameras:
             - record
       hwaccel_args: []
     detect:
-      width: 1280
-      height: 720
+      # Must be explicit: Frigate defaults detect.enabled to false, and without it the
+      # camera streams and records but never runs the detector, so no event is ever emitted.
+      enabled: true
+      # Match the stream's native resolution. Downscaling would shrink the plate, and the
+      # OCR falls off a cliff below 60 px of plate width (docs/05-evaluacion.md).
+      width: 1920
+      height: 1080
       fps: 5
     motion:
       threshold: 30
@@ -100,6 +114,7 @@ cameras:
             - record
       hwaccel_args: []
     detect:
+      enabled: true
       width: 1280
       height: 720
       fps: 5
@@ -110,4 +125,4 @@ cameras:
       carril:
         coordinates: 0.15,1.0,0.15,0.35,0.85,0.35,0.85,1.0
 
-version: 0.16-0
+version: 0.17-0

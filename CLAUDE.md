@@ -183,7 +183,7 @@ vehiculos_porteria/
 
 ## 7. Estado actual
 
-Actualizado: 2026-07-27
+Actualizado: 2026-07-31
 
 | Componente | Estado |
 |---|---|
@@ -193,7 +193,7 @@ Actualizado: 2026-07-27
 | `scripts/eval_ocr.py` + medición del OCR | ✅ **medido**, ver [docs/05-evaluacion.md](docs/05-evaluacion.md) |
 | `scripts/probe_video_alpr.py` (pipeline sobre video) | ✅ verificado sobre video real |
 | Video de prueba: vehículos + **placas legibles** | ✅ descargado |
-| `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ escrito, ⚠️ sin verificar en ejecución |
+| `infra/edge` (Frigate + Mosquitto + RTSP sim) | ✅ **verificado en ejecución**, 4 defectos corregidos |
 | Esquema de BD en Supabase | ✅ **aplicado y verificado** (migraciones 0001–0004) |
 | Mínimo privilegio por rol (RLS) | ✅ **6/6 comprobaciones** con `scripts/verify_rls.py` |
 | `services/edge_agent` | ✅ 60 tests, verificado con sesión grabada |

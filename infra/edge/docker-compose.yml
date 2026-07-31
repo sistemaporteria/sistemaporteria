@@ -15,18 +15,24 @@ services:
   # Loops the demo video as an RTSP stream, standing in for the real cameras.
   # Remove this service once physical cameras exist and point Frigate at their RTSP URLs.
   rtsp-sim:
-    image: bluenviron/mediamtx:latest
+    # The -ffmpeg variant is required: the plain image ships no ffmpeg binary, so every
+    # runOnInit below fails with "executable file not found in $PATH" and no stream exists.
+    image: bluenviron/mediamtx:1.19.3-ffmpeg
     container_name: porteria-rtsp-sim
     restart: unless-stopped
     environment:
       MTX_PROTOCOLS: tcp
+      # `-c:v copy`, not libx264: the sample files are already H.264, so re-encoding them
+      # only burns CPU (measured at ~420% for the two streams) that Frigate needs for
+      # detection and OCR. Passthrough also preserves the original pixels, and plate width
+      # in pixels is the variable the OCR is most sensitive to — see docs/05-evaluacion.md.
       MTX_PATHS_ENTRADA_RUNONINIT: >-
-        ffmpeg -re -stream_loop -1 -i /media/entrada.mp4 -an -c:v libx264 -preset ultrafast
-        -tune zerolatency -g 30 -f rtsp rtsp://localhost:8554/entrada
+        ffmpeg -re -stream_loop -1 -fflags +genpts -i /media/entrada.mp4 -an -c:v copy
+        -f rtsp rtsp://localhost:8554/entrada
       MTX_PATHS_ENTRADA_RUNONINITRESTART: "yes"
       MTX_PATHS_SALIDA_RUNONINIT: >-
-        ffmpeg -re -stream_loop -1 -i /media/salida.mp4 -an -c:v libx264 -preset ultrafast
-        -tune zerolatency -g 30 -f rtsp rtsp://localhost:8554/salida
+        ffmpeg -re -stream_loop -1 -fflags +genpts -i /media/salida.mp4 -an -c:v copy
+        -f rtsp rtsp://localhost:8554/salida
       MTX_PATHS_SALIDA_RUNONINITRESTART: "yes"
     ports:
       - "8554:8554"
